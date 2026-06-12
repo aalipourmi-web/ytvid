@@ -1,4 +1,26 @@
-<script>
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Precision Synced YouTube Loop</title>
+    <style>
+        * { box-sizing: border-box; }
+        body, html {
+            margin: 0; padding: 0; width: 100%; height: 100%;
+            background-color: #000; overflow: hidden;
+        }
+        #player {
+            position: absolute; top: 0; left: 0; width: 100%; height: 100%;
+            pointer-events: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div id="player"></div>
+
+    <script>
         const VIDEO_ID = '3sgj8fDxyfw'; 
         
         // 🔒 Locked to the exact MP3 duration
@@ -86,3 +108,5 @@
             }, 1000); 
         }
     </script>
+</body>
+</html>
