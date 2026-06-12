@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Precision Synced YouTube Loop</title>
+    <title>Synced YouTube Loop</title>
     <style>
         /* Make the video fill the entire screen */
         * {
@@ -33,71 +33,28 @@
 
     <script>
         // 1. REPLACE THIS WITH YOUR YOUTUBE VIDEO ID
+        // (The letters/numbers after "v=" in a YouTube URL)
         const VIDEO_ID = '3sgj8fDxyfw'; 
 
-        // State variables for precision timing
-        let serverOffset = 0;
-        let isCalibrated = false;
-        let playerReady = false;
-        let player;
-
-        // 2. Fetch exact UTC time and calculate latency offset (Ported from Audio Player)
-        async function calibrateWithServer() {
-            let bestOffset = 0;
-            let lowestLatency = Infinity;
-            const pingCount = 4; 
-
-            try {
-                for (let i = 0; i < pingCount; i++) {
-                    const start = performance.now();
-                    const response = await fetch(`https://worldtimeapi.org/api/timezone/Etc/UTC?nocache=${Math.random()}`);
-                    const data = await response.json();
-                    const end = performance.now();
-                    
-                    const rtt = end - start; 
-                    
-                    if (rtt < lowestLatency) {
-                        lowestLatency = rtt;
-                        const networkDelay = rtt / 2;
-                        const serverMs = new Date(data.utc_datetime).getTime();
-                        bestOffset = serverMs - (Date.now() - networkDelay);
-                    }
-                }
-                
-                serverOffset = bestOffset;
-                isCalibrated = true;
-                console.log(`Sync calibrated. Server Offset: ${serverOffset}ms. Network Latency: ${Math.round(lowestLatency / 2)}ms`);
-                
-                // If the YouTube iframe finished loading while we were pinging the server, sync it now
-                if (playerReady) syncVideoToUTC();
-                
-            } catch (e) {
-                console.error("Sync failed. Falling back to local clock.", e);
-                isCalibrated = true; // Proceed anyway with a 0 offset
-                if (playerReady) syncVideoToUTC();
-            }
-        }
-
-        // Start server calibration immediately
-        calibrateWithServer();
-
-        // 3. Load the YouTube IFrame Player API asynchronously
+        // 2. Load the YouTube IFrame Player API asynchronously
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         var firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
-        // 4. This function creates the <iframe> after the API code downloads
+        var player;
+        
+        // 3. This function creates the <iframe> after the API code downloads
         function onYouTubeIframeAPIReady() {
             player = new YT.Player('player', {
                 videoId: VIDEO_ID,
                 playerVars: {
                     'autoplay': 1,
-                    'controls': 0,    
-                    'rel': 0,         
-                    'showinfo': 0,    
+                    'controls': 0,    // Hide YouTube controls
+                    'rel': 0,         // Don't show related videos
+                    'showinfo': 0,    // Hide video title
                     'modestbranding': 1,
-                    'mute': 1         
+                    'mute': 1         // MUST be muted to allow autoplay in modern browsers
                 },
                 events: {
                     'onReady': onPlayerReady,
@@ -106,49 +63,41 @@
             });
         }
 
-        // 5. Calculate precise position based on Universal UTC Server Time
-        function syncVideoToUTC() {
-            // Wait until both the server data and the YouTube player are ready
-            if (!isCalibrated || !playerReady) return;
-
-            const videoDuration = player.getDuration();
+        // 4. Calculate seconds since midnight and sync the video
+        function syncVideoToMidnight(playerInstance) {
+            const now = new Date();
+            const midnight = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 0, 0, 0);
             
-            // Sometimes getDuration() takes a fraction of a second longer to populate
-            if (videoDuration <= 0) {
-                setTimeout(syncVideoToUTC, 100);
-                return;
+            // Get total seconds passed since midnight today
+            const secondsSinceMidnight = (now.getTime() - midnight.getTime()) / 1000;
+            
+            // Get the total duration of the video
+            const videoDuration = playerInstance.getDuration();
+            
+            if (videoDuration > 0) {
+                // Determine where the video *should* be in its loop cycle
+                const currentVideoTime = secondsSinceMidnight % videoDuration;
+                
+                playerInstance.seekTo(currentVideoTime, true);
+                playerInstance.playVideo();
             }
-
-            // Calculate the exact time using the server offset
-            const exactNow = Date.now() + serverOffset;
-            const syncedDate = new Date(exactNow);
-            
-            // Lock into Universal UTC Midnight (Ensures cross-timezone sync)
-            const midnight = new Date(Date.UTC(syncedDate.getUTCFullYear(), syncedDate.getUTCMonth(), syncedDate.getUTCDate(), 0, 0, 0));
-            
-            const msElapsedToday = exactNow - midnight.getTime();
-            const currentVideoTime = (msElapsedToday / 1000) % videoDuration;
-            
-            player.seekTo(currentVideoTime, true);
-            player.playVideo();
         }
 
-        // 6. When the player is ready, mark it and attempt sync
+        // 5. When the player is ready, sync it
         function onPlayerReady(event) {
-            playerReady = true;
-            // Delay slightly to ensure duration is loaded, then sync (if calibration is already done)
+            // We need a slight delay because getDuration() sometimes returns 0 immediately on load
             setTimeout(() => {
-                if (isCalibrated) {
-                    syncVideoToUTC();
-                }
+                syncVideoToMidnight(event.target);
             }, 500);
         }
 
-        // 7. Handle looping seamlessly
+        // 6. Handle looping seamlessly
         function onPlayerStateChange(event) {
+            // YT.PlayerState.ENDED is 0
             if (event.data === YT.PlayerState.ENDED) {
-                // Re-sync to the precise UTC server clock every loop to prevent drift
-                syncVideoToUTC();
+                // Instead of just restarting from 0, re-sync to midnight 
+                // to account for any drift or loading lag.
+                syncVideoToMidnight(event.target);
             }
         }
     </script>
