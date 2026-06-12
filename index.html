@@ -1,17 +1,54 @@
-<script>
-        // 1. YOUR YOUTUBE VIDEO ID
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>HearHere - Video Node</title>
+    <style>
+        body {
+            margin: 0;
+            padding: 0;
+            background-color: #010118;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            min-height: 100vh;
+            overflow: hidden;
+        }
+        /* Container that forces the YouTube video to fill the screen nicely */
+        .video-container {
+            position: relative;
+            width: 100vw;
+            height: 100vh;
+            background: #000;
+        }
+        iframe, #player {
+            width: 100%;
+            height: 100%;
+            border: none;
+        }
+    </style>
+</head>
+<body>
+
+    <div class="video-container">
+        <div id="player"></div>
+    </div>
+
+    <script>
+        // 1. YOUR YOUTUBE CONFIG
         const VIDEO_ID = '3sgj8fDxyfw'; 
 
-        // 2. Load the YouTube IFrame Player API asynchronously
+        // Load the YouTube API
         var tag = document.createElement('script');
         tag.src = "https://www.youtube.com/iframe_api";
         var firstScriptTag = document.getElementsByTagName('script')[0];
         firstScriptTag.parentNode.insertBefore(tag, firstScriptTag);
 
         var player;
-        let serverOffset = 0; // Will match the audio site's server offset
+        let serverOffset = 0;
+        let isCalibrated = false;
 
-        // 3. Create the <iframe> after the API downloads
         function onYouTubeIframeAPIReady() {
             player = new YT.Player('player', {
                 videoId: VIDEO_ID,
@@ -21,7 +58,7 @@
                     'rel': 0,         
                     'showinfo': 0,    
                     'modestbranding': 1,
-                    'mute': 1         // Must stay muted to allow autoplay
+                    'mute': 1 // Stays muted to bypass browser autoplay blocks
                 },
                 events: {
                     'onReady': onPlayerReady,
@@ -30,7 +67,7 @@
             });
         }
 
-        // 4. Fetch WorldTimeAPI just like index_2.html does to align clocks
+        // 2. SERVER CALIBRATION (Directly matching your audio site)
         async function calibrateWithServer() {
             try {
                 const start = performance.now();
@@ -42,72 +79,80 @@
                 const networkDelay = rtt / 2;
                 const serverMs = new Date(data.utc_datetime).getTime();
                 
-                // This locks the video site into the exact same universal time grid
                 serverOffset = serverMs - (Date.now() - networkDelay);
-                console.log("Video server calibration successful.");
+                isCalibrated = true;
+                console.log(`Video Sync calibrated. Server Offset: ${serverOffset}ms`);
             } catch (e) {
-                console.error("Server sync failed, falling back to local clock.", e);
+                console.error("Sync failed.", e);
                 serverOffset = 0;
             }
         }
 
-        // Kick off the clock calibration immediately
+        // Execute calibration immediately
         calibrateWithServer();
 
-        // 5. Calculate perfect sync time matching index_2.html's UTC formula
+        // 3. MASTER TIME CALCULATOR
         function getPerfectSyncTime(durationSeconds) {
-            if (!durationSeconds || isNaN(durationSeconds)) return 0;
+            if (!durationSeconds || isNaN(durationSeconds) || durationSeconds <= 0) return 0;
             
-            // Get exact time adjusted for server lag
             const exactNow = Date.now() + serverOffset;
             const syncedDate = new Date(exactNow);
             
-            // Generate a strict UTC Midnight anchor point 
+            // Strict UTC Midnight reference anchor
             const midnight = new Date(Date.UTC(syncedDate.getUTCFullYear(), syncedDate.getUTCMonth(), syncedDate.getUTCDate(), 0, 0, 0));
             
             const msElapsedToday = exactNow - midnight.getTime();
             const durationMs = durationSeconds * 1000;
             
-            // Return current position within the current loop cycle (in seconds)
             return (msElapsedToday % durationMs) / 1000;
         }
 
-        // 6. Push video to the exact time slot
-        function syncVideoToClock() {
-            if (player && typeof player.getDuration === 'function') {
-                const videoDuration = player.getDuration();
-                if (videoDuration > 0) {
-                    const targetTime = getPerfectSyncTime(videoDuration);
-                    player.seekTo(targetTime, true);
-                    player.playVideo();
-                }
+        // 4. SAFE EXECUTION JUMP
+        function executeVideoSync() {
+            if (!player || typeof player.getDuration !== 'function') return;
+
+            const duration = player.getDuration();
+            
+            // If YouTube hasn't loaded video data yet, wait 100ms and retry
+            if (duration <= 0) {
+                setTimeout(executeVideoSync, 100);
+                return;
             }
+
+            const jumpToSeconds = getPerfectSyncTime(duration);
+            player.seekTo(jumpToSeconds, true);
+            player.playVideo();
+            console.log(`Video snapped to shared timeline: ${jumpToSeconds}s`);
         }
 
-        // 7. Trigger sync on player ready state
+        // 5. EVENT HANDLERS & DRIFT WATCHDOG
         function onPlayerReady(event) {
-            setTimeout(() => {
-                syncVideoToClock();
-                
-                // Periodic micro-sync correction check every 5 seconds to eliminate playback drift
-                setInterval(() => {
-                    if (player && player.getPlayerState() === YT.PlayerState.PLAYING) {
-                        const currentVideoTime = player.getCurrentTime();
-                        const correctTime = getPerfectSyncTime(player.getDuration());
+            executeVideoSync();
+            
+            // Anti-drift looping monitor (Runs every 2 seconds)
+            setInterval(() => {
+                if (player && typeof player.getPlayerState === 'function' && player.getPlayerState() === YT.PlayerState.PLAYING) {
+                    const currentVideoTime = player.getCurrentTime();
+                    const duration = player.getDuration();
+                    
+                    if (duration > 0) {
+                        const targetTime = getPerfectSyncTime(duration);
                         
-                        // If drift is more than 200 milliseconds, quietly pull it back into sync
-                        if (Math.abs(currentVideoTime - correctTime) > 0.2) {
-                            player.seekTo(correctTime, true);
+                        // If browser tab throttling drifts the video by more than 250ms, snap it back
+                        if (Math.abs(currentVideoTime - targetTime) > 0.25) {
+                            player.seekTo(targetTime, true);
+                            console.log("Drift corrected.");
                         }
                     }
-                }, 5000);
-            }, 600);
+                }
+            }, 2000);
         }
 
-        // 8. Handle loop cycles seamlessly
         function onPlayerStateChange(event) {
             if (event.data === YT.PlayerState.ENDED) {
-                syncVideoToClock();
+                executeVideoSync();
             }
         }
     </script>
+</body>
+</html>
